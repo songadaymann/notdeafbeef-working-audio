@@ -1,0 +1,101 @@
+# Build artifacts - Assembly & C
+*.o
+*.obj
+*.elf
+*.map
+*.lst
+*.a
+*.so
+*.dylib
+*.dll
+/build/
+/bin/
+/dist/
+/target/
+
+# Audio output files
+*.wav
+*.mp3
+*.flac
+*.aiff
+*.au
+seed_*
+/audio_output/
+/samples/
+/capture/
+/log/
+/bench-*/
+
+# OS artifacts
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+.#*
+#*#
+
+# Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.backup
+.tmp
+
+# Compilation databases
+compile_commands.json
+.cache/
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+core
+core.*
+
+# Assembly-specific
+*.bin
+*.hex
+*.srec
+*.asm.bak
+*.s.bak
+
+# Python (if any build scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+/venv/
+/.env
+
+# Temporary files
+/tmp/
+*.tmp
+*.temp
+segment.sample.txt
+
+# Large test files
+/test_data/
+/reference_audio/
+
+# Visual artifacts
+/screenshots/
+/frames/
+*.png
+*.jpg
+*.gif
+*.bmp
+*.tga
+*.exr
+
+# Logs and debugging
+*.log
+debug_*
+lldb_*
+gdb_*

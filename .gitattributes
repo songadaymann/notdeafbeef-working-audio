@@ -1,0 +1,36 @@
+# Assembly files
+*.asm text eol=lf
+*.s text eol=lf
+
+# C/C++ files  
+*.c text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+
+# Makefiles and scripts
+Makefile text eol=lf
+*.mk text eol=lf
+*.sh text eol=lf
+
+# Documentation
+*.md text eol=lf
+*.txt text eol=lf
+
+# Binary files
+*.wav binary
+*.mp3 binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.o binary
+*.elf binary
+*.bin binary
+
+# Assembly diff settings (reduce noise)
+*.asm diff=asmdiff
+*.s diff=asmdiff
+
+# Large files that should be tracked with LFS if needed
+*.wav filter=lfs diff=lfs merge=lfs -text
+*.mp3 filter=lfs diff=lfs merge=lfs -text
