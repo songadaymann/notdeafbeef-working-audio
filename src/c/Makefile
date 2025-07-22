@@ -386,7 +386,7 @@ $(ASM_DIR):
 
 .PHONY: clean
 clean:
-	rm -rf src/*.o bin src/euclid.o 2>/dev/null || true
+	rm -rf src/*.o bin src/euclid.o ../asm/active/*.o 2>/dev/null || true
 
 .PHONY: sine
 sine: $(TEST_BIN)
