@@ -72,34 +72,34 @@ _fm_voice_process:
 
     // ---------------- Parameter load ------------------------------------
     ldr     s16, [x0]            // sr
-    ldr     s26, [x0, #4]        // carrier_freq
-    ldr     s27, [x0, #8]        // ratio
+    ldr     s9, [x0, #4]         // carrier_freq (was s26, using s9 safe)
+    ldr     s8, [x0, #8]         // ratio (was s27, using s8 safe)
     ldr     s15, [x0, #12]       // index0
-    ldr     s25, [x0, #16]       // amp
-    ldr     s21, [x0, #20]       // decay
-    ldr     s22, [x0, #32]       // carrier_phase (cp)
-    ldr     s23, [x0, #36]       // mod_phase (mp)
+    ldr     s7, [x0, #16]        // amp (was s25, using s7 safe)
+    ldr     s4, [x0, #20]        // decay (moved from s21)
+    ldr     s5, [x0, #32]        // carrier_phase (cp) (moved from s22)
+    ldr     s10, [x0, #36]       // mod_phase (mp) (moved from s23)
 
     // ----------- Constants & increments ---------------------------------
     adrp    x10, Lfm_tau@PAGE
     add     x10, x10, Lfm_tau@PAGEOFF
-    ldr     s24, [x10]           // TAU
+    ldr     s3, [x10]            // TAU (moved from s24)
 
-    fmul    s12, s24, s26        // TAU * f_c (temp)
-    fdiv    s24, s12, s16        // s24 := c_inc
+    fmul    s12, s3, s9          // TAU * f_c (temp)
+    fdiv    s3, s12, s16         // s3 := c_inc (moved from s24)
     // m_inc = c_inc * ratio
-    fmul    s12, s24, s27        // s12 := m_inc
+    fmul    s12, s3, s8          // s12 := m_inc
     fmov    s14, s12             // mirror m_inc into s14 for NEON dup (v14)
 
     // Scalars used each iteration
     fmov    s13, #4.0            // constant 4.0
-    fmul    s31, s24, s13        // 4 * c_inc (store in s31)
-    fmul    s30, s12, s13        // 4 * m_inc (store in s30)
+    fmul    s31, s3, s13         // 4 * c_inc (store in s31)
+    fmul    s29, s12, s13        // 4 * m_inc (store in s29)
 
     // Pre-compute sr_inv and –decay
-    fdiv    s29, s13, s13        // 1.0
-    fdiv    s29, s29, s16        // 1 / sr
-    fneg    s30, s21             // –decay
+    fdiv    s11, s13, s13        // 1.0 (was s29, now safe)
+    fdiv    s11, s11, s16        // 1 / sr
+    fneg    s30, s4              // –decay
 
     // Lane vector {0,1,2,3}
     adrp    x9, Lfm_const@PAGE
@@ -130,21 +130,21 @@ _fm_voice_process:
     blt     .Ltail
 
     // cp_v = cp + lane*c_inc
-    dup     v2.4s,  v22.s[0]
-    dup     v3.4s,  v24.s[0]
+    dup     v2.4s,  v5.s[0]
+    dup     v3.4s,  v3.s[0]
     fmla    v2.4s,  v3.4s, v1.4s
 
     // mp_v = mp + lane*m_inc
-    dup     v4.4s,  v23.s[0]
-    fmov    s30, s14            // copy m_inc safely
-    dup     v5.4s,  v30.s[0]
+    dup     v4.4s,  v10.s[0]
+    fmov    s28, s14            // copy m_inc safely (using s28)
+    dup     v5.4s,  v28.s[0]
     fmla    v4.4s,  v5.4s, v1.4s
 
     // t_vec = (pos + lane) * sr_inv
-    scvtf   s28,  w4          // convert pos to float
-    dup     v6.4s,  v28.s[0]
+    scvtf   s6,   w4          // convert pos to float (was s28, using s6 safe)
+    dup     v6.4s,  v6.s[0]
     fadd    v6.4s,  v6.4s, v1.4s
-    dup     v7.4s,  v29.s[0]
+    dup     v7.4s,  v11.s[0]
     fmul    v6.4s,  v6.4s, v7.4s
 
     // env_v = exp4_ps_asm( –decay * t_vec )
@@ -200,9 +200,9 @@ _fm_voice_process:
     mov     x12, x23
     mov     v13.16b, v0.16b
     fmul    v13.4s, v13.4s, v9.4s
-    fmov    s28, s25          // copy amp scalar safely
-    dup     v29.4s, v28.s[0]
-    fmul    v13.4s, v13.4s, v29.4s
+    fmov    s5, s7            // copy amp scalar safely
+    dup     v21.4s, v5.s[0]
+    fmul    v13.4s, v13.4s, v21.4s
 
     // Check SP integrity; if changed trigger breakpoint for debugging
     cmp     sp, x24
@@ -235,8 +235,8 @@ _fm_voice_process:
     st1     {v26.4s}, [x15]
 
     // Advance phases / counters
-    fadd    s22, s22, s31
-    fadd    s23, s23, s30
+    fadd    s5, s5, s31
+    fadd    s10, s10, s29
     add     w4,  w4,  #4          // pos += 4
 
     subs    w12, w12, #4          // n -= 4
@@ -247,8 +247,8 @@ _fm_voice_process:
     // (Optional scalar tail for <4 frames not yet implemented)
 
     // Store updated state back to struct
-    str     s22, [x0, #32]
-    str     s23, [x0, #36]
+    str     s5, [x0, #32]
+    str     s10, [x0, #36]
     str     w4,  [x0, #28]
 
 // -------------------------------------------------------------------------
