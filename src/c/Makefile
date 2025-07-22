@@ -200,7 +200,7 @@ BASS_BIN := bin/gen_bass
 BASSQ_BIN := bin/gen_bass_quantum
 BASSP_BIN := bin/gen_bass_plucky
 
-SEG_OBJ := src/segment.o src/wav_writer.o
+SEG_OBJ := src/segment.o src/wav_writer.o src/euclid.o
 
 # -----------------------------------------------------------------
 # Conditional C object inclusion depending on whether ASM version
