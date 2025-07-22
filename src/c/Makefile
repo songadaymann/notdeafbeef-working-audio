@@ -200,7 +200,12 @@ BASS_BIN := bin/gen_bass
 BASSQ_BIN := bin/gen_bass_quantum
 BASSP_BIN := bin/gen_bass_plucky
 
-SEG_OBJ := src/segment.o src/wav_writer.o src/euclid.o
+SEG_OBJ := src/segment.o src/wav_writer.o
+
+# Include C euclid.o only when not using assembly (to avoid duplicate symbols)
+ifneq ($(USE_ASM),1)
+SEG_OBJ += src/euclid.o
+endif
 
 # -----------------------------------------------------------------
 # Conditional C object inclusion depending on whether ASM version
