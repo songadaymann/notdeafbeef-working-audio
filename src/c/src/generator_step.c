@@ -117,20 +117,28 @@ void generator_process_voices(generator_t *g, float32_t *Ld, float32_t *Rd,
     snare_process(&g->snare, Ld, Rd, n);
     hat_process(&g->hat,     Ld, Rd, n);
 
-#ifndef MELODY_ASM
+#if !NO_C_VOICES
+    // C fallback path (only when NO_C_VOICES disabled)
+    #ifndef MELODY_ASM
+        melody_process(&g->mel,         Ls, Rs, n);
+    #endif
+    #ifndef FM_VOICE_ASM
+        fm_voice_process(&g->mid_fm,    Ls, Rs, n);
+    #endif
+    #ifndef FM_VOICE_ASM
+        fm_voice_process(&g->bass_fm,   Ls, Rs, n);
+    #endif
+    #ifndef SIMPLE_VOICE_ASM
+        simple_voice_process(&g->mid_simple, Ls, Rs, n);
+    #endif
+#else
+    // NO_C_VOICES: All voices must be ASM - no fallbacks allowed
+    // These calls will fail to link if ASM implementations are missing
     melody_process(&g->mel,         Ls, Rs, n);
-#endif
-#ifndef FM_VOICE_ASM
     fm_voice_process(&g->mid_fm,    Ls, Rs, n);
-#endif
-
-    /* Removed early return – allow remaining voices to process */
-
-#if 0
-    /* RMS probe & voice sum debug – disabled for release build (unaligned NEON loads crash) */
-#endif
     fm_voice_process(&g->bass_fm,   Ls, Rs, n);
     simple_voice_process(&g->mid_simple, Ls, Rs, n);
+#endif
 #if 0
     /* Disabled additional debug prints */
 #endif

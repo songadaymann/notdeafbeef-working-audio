@@ -4,6 +4,13 @@
 .private_extern sin4_ps_asm_internal
 sin4_ps_asm_internal:
 _sin4_ps_asm:
+    // Save callee-saved SIMD registers (v8-v15) - ARM64 ABI requirement
+    sub     sp, sp, #128              // 8×16 = 128 bytes
+    stp     q8,  q9,  [sp, #0]        // save v8, v9
+    stp     q10, q11, [sp, #32]       // save v10, v11
+    stp     q12, q13, [sp, #64]       // save v12, v13
+    stp     q14, q15, [sp, #96]       // save v14, v15
+
     // v0 contains input x; will carry final result.
     // Load constant table base
     adrp x9, Lsin_const@PAGE
@@ -56,6 +63,13 @@ _sin4_ps_asm:
     fmul v16.4s, v9.4s, v14.4s
     // x += x * w
     fmla v0.4s, v0.4s, v16.4s
+
+    // Restore callee-saved SIMD registers
+    ldp     q14, q15, [sp, #96]       // restore v14, v15
+    ldp     q12, q13, [sp, #64]       // restore v12, v13
+    ldp     q10, q11, [sp, #32]       // restore v10, v11
+    ldp     q8,  q9,  [sp, #0]        // restore v8, v9
+    add     sp, sp, #128              // restore stack pointer
 
     ret
 

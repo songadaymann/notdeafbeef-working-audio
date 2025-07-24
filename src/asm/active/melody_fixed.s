@@ -7,7 +7,7 @@
 melody_constants:
     .float 6.2831853071795864769      // [0] TAU
     .float 5.0                        // [4] DECAY_RATE  
-    .float 0.07                       // [8] AMP
+    .float 0.25                       // [8] AMP
     .float 2.0                        // [12] TWO
     .float 1.0                        // [16] ONE
     .float 1.2                        // [20] DRIVE_GAIN

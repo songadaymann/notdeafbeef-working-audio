@@ -1,225 +1,233 @@
-//
-// Dead-simple FM voice assembly implementation
-// Created: 2025-07-22
-// Purpose: Basic, working FM synthesis to replace complex broken version
-//
+	.section	__TEXT,__const
+	.align 2
+.L_tau:
+	.float 6.283185307
+.L_pi:
+	.float 3.14159265
+.L_six:
+	.float 6.0
+.L_onehundredtwenty:
+	.float 120.0
 
-.text
-.align 4
+	.text
+	.align 2
+	.globl _fm_voice_process
 
-//
-// void fm_voice_process(fm_voice_t *v, float32_t *L, float32_t *R, uint32_t n)
-//
-// This is a "hello FM" version - extremely simple to ensure it works
-// Just renders a fixed frequency sine wave at -6dB for now
-//
-.global _fm_voice_process
-// .type fm_voice_process, %function  // Skip for macOS
-
+// fm_voice_process(fm_voice_t *v, float32_t *L, float32_t *R, uint32_t n)
+// Struct offsets: sr=0, carrier_freq=4, ratio=8, index0=12, amp=16, decay=20
+// len=24, pos=28, carrier_phase=32, mod_phase=36
 _fm_voice_process:
-    // Prologue - save registers and SIMD registers
-    stp     x29, x30, [sp, #-16]!
-    mov     x29, sp
+    // x0 = fm_voice_t *v, x1 = L, x2 = R, x3 = n
     
-    // Save callee-saved SIMD registers (v8-v15) - ARM64 ABI requirement
-    sub     sp, sp, #128              // 8×16 = 128 bytes  
-    stp     q8,  q9,  [sp, #0]        // save v8, v9
-    stp     q10, q11, [sp, #32]       // save v10, v11
-    stp     q12, q13, [sp, #64]       // save v12, v13
-    stp     q14, q15, [sp, #96]       // save v14, v15
+    // Early exit if pos >= len
+    ldr w4, [x0, #28]   // v->pos
+    ldr w5, [x0, #24]   // v->len  
+    cmp w4, w5
+    b.ge .fm_exit
     
-    // Input parameters:
-    // x0 = fm_voice_t *v
-    // x1 = float32_t *L  
-    // x2 = float32_t *R
-    // x3 = uint32_t n
+    // Load parameters
+    ldr s16, [x0, #0]   // v->sr
+    ldr s17, [x0, #4]   // v->carrier_freq
+    ldr s18, [x0, #8]   // v->ratio
+    ldr s19, [x0, #12]  // v->index0
+    ldr s20, [x0, #16]  // v->amp
+    ldr s21, [x0, #20]  // v->decay
+    ldr s22, [x0, #32]  // v->carrier_phase
+    ldr s23, [x0, #36]  // v->mod_phase
     
-    // Safety check: if n == 0, return immediately
-    cbz     x3, .Lreturn
+    // Calculate increments: c_inc = TAU * carrier_freq / sr
+    adrp x7, .L_tau@PAGE
+    add x7, x7, .L_tau@PAGEOFF
+    ldr s0, [x7]           // Load TAU
+    fmul s24, s0, s17      // TAU * carrier_freq
+    fdiv s24, s24, s16     // c_inc = TAU * carrier_freq / sr
     
-    // TEMP: Skip voice length check to debug audio issue
-    // Check if voice is active: if (v->pos >= v->len) return
-    // ldr     w5, [x0, #28]       // v->pos
-    // ldr     w6, [x0, #24]       // v->len  
-    // cmp     w5, w6
-    // bhs     .Lreturn            // return if pos >= len (unsigned comparison)
+    // m_inc = TAU * carrier_freq * ratio / sr
+    fmul s25, s24, s18     // m_inc = c_inc * ratio
     
-    // Load voice parameters into SAFE registers (v8-v15 are callee-saved)
-    ldr     s0, [x0, #32]       // v->carrier_phase 
-    fmov    s15, s0             // Initialize running carrier phase accumulator
-    ldr     s1, [x0, #36]       // v->mod_phase
-    fmov    s14, s1             // Initialize running modulator phase accumulator
-    ldr     s8, [x0, #0]        // v->sr (safe register)
-    ldr     s9, [x0, #4]        // v->carrier_freq (safe register)
-    ldr     s10, [x0, #16]      // v->amp (safe register)
-    ldr     s11, [x0, #20]      // v->decay (safe register)
-    ldr     s12, [x0, #8]       // v->ratio (safe register)
-    ldr     s13, [x0, #12]      // v->index0 (safe register)
+    mov w6, #0             // i = 0
     
-    // Bounds check on inputs to prevent instability (using safe registers)
-    // Clamp sample rate to reasonable range [8000, 192000]
-    ldr     w5, =0x45FA0000      // 8000.0 in hex
-    fmov    s5, w5
-    ldr     w5, =0x473B8000      // 192000.0 in hex  
-    fmov    s6, w5
-    fmax    s8, s8, s5          // sr = max(sr, 8000)
-    fmin    s8, s8, s6          // sr = min(sr, 192000)
+.fm_loop:
+    cmp w6, w3             // i < n?
+    b.ge .fm_loop_end
     
-    // Clamp frequency to reasonable range [1, 20000]
-    ldr     w5, =0x3F800000      // 1.0 in hex
-    fmov    s5, w5
-    ldr     w5, =0x469C4000      // 20000.0 in hex
-    fmov    s6, w5
-    fmax    s9, s9, s5          // freq = max(freq, 1.0)
-    fmin    s9, s9, s6          // freq = min(freq, 20000.0)
+    // Check if pos >= len
+    ldr w4, [x0, #28]      // v->pos
+    ldr w5, [x0, #24]      // v->len
+    cmp w4, w5
+    b.ge .fm_loop_end
     
-    // Calculate carrier and modulator phase increments using 2π
-    ldr     w5, =0x40C90FDB      // 2π = 6.2831855f in hex
-    fmov    s26, w5             // s26 = TAU (for phase wrapping)
+    // Calculate envelope: t = pos / sr
+    ucvtf s26, w4          // convert pos to float
+    fdiv s26, s26, s16     // t = pos / sr
     
-    // Carrier phase increment: c_inc = 2π * carrier_freq / sr
-    fmul    s27, s26, s9        // s27 = 2π * carrier_freq 
-    fdiv    s27, s27, s8        // s27 = carrier phase delta
+    // Simple exponential decay approximation: env ≈ 1.0 / (1.0 + decay * t)
+    fmul s27, s21, s26     // decay * t
+    fmov s28, #1.0
+    fadd s27, s28, s27     // 1.0 + decay * t
+    fdiv s27, s28, s27     // env = 1.0 / (1.0 + decay * t)
     
-    // Modulator phase increment: m_inc = 2π * carrier_freq * ratio / sr  
-    fmul    s28, s9, s12        // s28 = carrier_freq * ratio
-    fmul    s28, s26, s28       // s28 = 2π * carrier_freq * ratio
-    fdiv    s28, s28, s8        // s28 = modulator phase delta
+    // Index with envelope: index = index0 * env
+    fmul s29, s19, s27     // index = index0 * env
     
-    // Process loop
-    mov     x4, #0              // loop counter i
+    // FM synthesis: sin(carrier_phase + index * sin(mod_phase))
+    // Use polynomial approximation for sine waves
     
-.Lloop:
-    // TEMP: Skip inside loop check too
-    // Check if voice is still active inside loop: if (v->pos >= v->len) break
-    // ldr     w5, [x0, #28]       // v->pos  
-    // ldr     w6, [x0, #24]       // v->len
-    // cmp     w5, w6
-    // bhs     .Lloop_end          // break if pos >= len
+    // Step 1: Calculate sin(mod_phase) using polynomial approximation
+    // Normalize mod_phase to [-π, π] range
+    adrp x7, .L_pi@PAGE
+    add x7, x7, .L_pi@PAGEOFF
+    ldr s30, [x7]          // Load PI
     
-    // ----- Proper FM synthesis: sample = sin(carrier + index * sin(modulator)) -----
+    // Wrap mod_phase to [-π, π]
+    fmov s31, s23          // s31 = mod_phase
+    fcmp s31, s30          // compare with π
+    b.le .fm_mod_no_wrap_pos
+    fsub s31, s31, s30     // mod_phase - π
+    fsub s31, s31, s30     // mod_phase - 2π
+.fm_mod_no_wrap_pos:
+    fneg s0, s30           // -π
+    fcmp s31, s0           // compare with -π
+    b.ge .fm_mod_wrapped
+    fadd s31, s31, s30     // mod_phase + π
+    fadd s31, s31, s30     // mod_phase + 2π
+.fm_mod_wrapped:
     
-    // Step 1: Calculate sin(modulator_phase)
-    fmov    s0, s14            // s0 = modulator phase
-    dup     v0.4s, v0.s[0]     // v0 = {mod_phase,mod_phase,mod_phase,mod_phase}
-    bl      _sin4_ps_asm       // v0.s[0] = sin(modulator_phase)
-    mov     s23, v0.s[0]       // s23 = sin(modulator) - SAFE register
+    // Use polynomial sine approximation instead of libm for stability
+    // sin(x) ≈ x - x³/6 + x⁵/120 (higher order for better accuracy)
+    fmul s0, s31, s31      // x²
+    fmul s1, s0, s31       // x³
+    fmul s2, s0, s0        // x⁴
+    fmul s3, s2, s31       // x⁵
     
-    // Step 2: Calculate index * sin(modulator)
-    ldr     s13, [x0, #12]     // v->index0 (reload after helper calls)
-    fmul    s23, s23, s13      // s23 = index * sin(modulator)
+    // Calculate x³/6
+    adrp x7, .L_six@PAGE
+    add x7, x7, .L_six@PAGEOFF
+    ldr s4, [x7]
+    fdiv s1, s1, s4        // x³/6
     
-    // Step 3: Calculate carrier + (index * sin(modulator))
-    fadd    s0, s15, s23       // s0 = carrier_phase + index * sin(modulator)
+    // Calculate x⁵/120  
+    adrp x7, .L_onehundredtwenty@PAGE
+    add x7, x7, .L_onehundredtwenty@PAGEOFF
+    ldr s4, [x7]
+    fdiv s3, s3, s4        // x⁵/120
     
-    // Step 4: Calculate sin(carrier + index * sin(modulator))
-    dup     v0.4s, v0.s[0]     // v0 = {fm_phase,fm_phase,fm_phase,fm_phase}
-    bl      _sin4_ps_asm       // v0.s[0] = sin(fm_phase)
-    mov     s24, v0.s[0]       // s24 = FM output - SAFE register
+    // Combine: x - x³/6 + x⁵/120
+    fsub s31, s31, s1      // x - x³/6
+    fadd s31, s31, s3      // x - x³/6 + x⁵/120
     
-    // ----- Apply simple linear decay with bounds checking -----
-    ldr     s10, [x0, #16]      // v->amp (reload after helper calls)
-    ldr     w5, [x0, #28]       // v->pos
-    ldr     w6, [x0, #24]       // v->len
+    // Step 2: Apply modulation index: index * sin(mod_phase)
+    fmul s31, s29, s31     // index * sin(mod_phase)
     
-    // Safety check: if pos >= len, set decay to 0
-    cmp     w5, w6
-    bhs     .Lsilent            // if pos >= len, jump to silent
+    // Clamp modulation to prevent instability: limit to [-3.0, 3.0]
+    fmov s0, #3.0
+    fcmp s31, s0
+    b.le .fm_mod_clamp_pos_ok
+    fmov s31, s0           // clamp to +3.0
+.fm_mod_clamp_pos_ok:
+    fneg s0, s0            // -3.0
+    fcmp s31, s0
+    b.ge .fm_mod_clamp_neg_ok
+    fmov s31, s0           // clamp to -3.0
+.fm_mod_clamp_neg_ok:
     
-    ucvtf   s20, w5             // s20 = (float)pos
-    ucvtf   s21, w6             // s21 = (float)len
-    fdiv    s22, s20, s21       // s22 = pos/len (should be 0 to 1)
-    fmov    s23, #1.0           // s23 = 1.0
-    fsub    s23, s23, s22       // s23 = 1 - pos/len (1 to 0, linear decay)
+    // Step 3: Add to carrier phase: carrier_phase + index * sin(mod_phase)
+    fadd s31, s22, s31     // carrier_phase + index * sin(mod_phase)
     
-    // Clamp decay factor to [0.0, 1.0] range
-    fmov    s25, #0.0           // s25 = 0.0
-    fmax    s23, s23, s25       // s23 = max(decay, 0.0)
-    fmov    s25, #1.0           // s25 = 1.0  
-    fmin    s23, s23, s25       // s23 = min(decay, 1.0)
+    // Step 4: Calculate final sine: sin(carrier_phase + index * sin(mod_phase))
+    // Wrap result to [-π, π] range
+    fcmp s31, s30          // compare with π
+    b.le .fm_carr_no_wrap_pos
+    fsub s31, s31, s30     // result - π
+    fsub s31, s31, s30     // result - 2π
+.fm_carr_no_wrap_pos:
+    fneg s0, s30           // -π
+    fcmp s31, s0           // compare with -π
+    b.ge .fm_carr_wrapped
+    fadd s31, s31, s30     // result + π
+    fadd s31, s31, s30     // result + 2π
+.fm_carr_wrapped:
     
-    fmul    s10, s10, s23       // s10 = amp * decay_factor
-    fmul    s5, s24, s10        // s5 = amplitude * fm_sample * decay
-    b       .Loutput
+    // Use higher-order polynomial sine approximation  
+    // sin(x) ≈ x - x³/6 + x⁵/120 (better accuracy than simple version)
+    fmul s0, s31, s31      // x²
+    fmul s1, s0, s31       // x³
+    fmul s2, s0, s0        // x⁴
+    fmul s3, s2, s31       // x⁵
     
-.Lsilent:
-    fmov    s5, #0.0            // output silence if note finished
+    // Calculate x³/6
+    adrp x7, .L_six@PAGE
+    add x7, x7, .L_six@PAGEOFF
+    ldr s4, [x7]
+    fdiv s1, s1, s4        // x³/6
     
-.Loutput:
+    // Calculate x⁵/120  
+    adrp x7, .L_onehundredtwenty@PAGE
+    add x7, x7, .L_onehundredtwenty@PAGEOFF
+    ldr s4, [x7]
+    fdiv s3, s3, s4        // x⁵/120
     
-    // Add to both left and right channels
-    ldr     s6, [x1, x4, lsl #2]   // load L[i] 
-    ldr     s7, [x2, x4, lsl #2]   // load R[i]
-    fadd    s6, s6, s5             // L[i] += sample
-    fadd    s7, s7, s5             // R[i] += sample  
-    str     s6, [x1, x4, lsl #2]   // store L[i]
-    str     s7, [x2, x4, lsl #2]   // store R[i]
+    // Combine: x - x³/6 + x⁵/120
+    fsub s31, s31, s1      // x - x³/6
+    fadd s31, s31, s3      // x - x³/6 + x⁵/120
+    // s31 now contains the final FM synthesis result
     
-    // Increment both carrier and modulator phases
-    fadd    s15, s15, s27         // advance carrier phase
-    fadd    s14, s14, s28         // advance modulator phase
+    // Apply envelope and amplitude (with scaling to prevent clipping)
+    fmul s31, s31, s27     // apply envelope
+    fmul s31, s31, s20     // apply amplitude
+    fmov s0, #0.25         // Scale down to prevent clipping from FM harmonics  
+    fmul s31, s31, s0      // final scaling
     
-    // Wrap carrier phase to [0, 2π] range to prevent explosion
-    fcmp    s15, s26
-    blt     .Lcarrier_wrap_done
-    fsub    s15, s15, s26         // carrier_phase -= 2π
-    fcmp    s15, s26              // check again (only do this once to avoid hanging)
-    blt     .Lcarrier_wrap_done
-    fsub    s15, s15, s26         // carrier_phase -= 2π (second time max)
+    // Final safety clamp to prevent amplitude spikes: limit to [-1.0, 1.0]
+    fmov s0, #1.0
+    fcmp s31, s0
+    b.le .fm_out_clamp_pos_ok
+    fmov s31, s0           // clamp to +1.0
+.fm_out_clamp_pos_ok:
+    fneg s0, s0            // -1.0
+    fcmp s31, s0
+    b.ge .fm_out_clamp_neg_ok
+    fmov s31, s0           // clamp to -1.0
+.fm_out_clamp_neg_ok:
     
-    // Also handle negative wrap for carrier: while (phase < 0) phase += 2π  
-.Lcarrier_wrap_done:
-    fmov    s29, #0.0             // use s29 for zero comparison
-    fcmp    s15, s29
-    bge     .Lcarrier_positive
-    fadd    s15, s15, s26         // carrier_phase += 2π
+    // Add to output buffers
+    ldr s0, [x1, x6, lsl #2]  // L[i]
+    fadd s0, s0, s31          // L[i] += sample
+    str s0, [x1, x6, lsl #2]  // store L[i]
     
-.Lcarrier_positive:
+    ldr s0, [x2, x6, lsl #2]  // R[i]
+    fadd s0, s0, s31          // R[i] += sample
+    str s0, [x2, x6, lsl #2]  // store R[i]
     
-    // Wrap modulator phase to [0, 2π] range to prevent explosion
-    fcmp    s14, s26
-    blt     .Lmod_wrap_done
-    fsub    s14, s14, s26         // mod_phase -= 2π
-    fcmp    s14, s26              // check again (only do this once to avoid hanging)
-    blt     .Lmod_wrap_done
-    fsub    s14, s14, s26         // mod_phase -= 2π (second time max)
+    // Update phases
+    fadd s22, s22, s24     // carrier_phase += c_inc
+    fadd s23, s23, s25     // mod_phase += m_inc
     
-    // Also handle negative wrap for modulator: while (phase < 0) phase += 2π  
-.Lmod_wrap_done:
-    fcmp    s14, s29
-    bge     .Lmod_positive
-    fadd    s14, s14, s26         // mod_phase += 2π
+    // Keep phases in range [0, TAU]
+    adrp x7, .L_tau@PAGE
+    add x7, x7, .L_tau@PAGEOFF
+    ldr s0, [x7]           // Load TAU
+    fcmp s22, s0
+    b.lt .fm_skip_carrier_wrap
+    fsub s22, s22, s0
+.fm_skip_carrier_wrap:
     
-.Lmod_positive:
+    fcmp s23, s0
+    b.lt .fm_skip_mod_wrap
+    fsub s23, s23, s0
+.fm_skip_mod_wrap:
     
-    // Phase is already in s15 for next iteration - no copy needed
+    // Increment counters
+    add w6, w6, #1         // i++
+    add w4, w4, #1         // pos++
+    str w4, [x0, #28]      // store v->pos
     
-    // Increment voice position: v->pos++
-    ldr     w5, [x0, #28]       // v->pos
-    add     w5, w5, #1          // pos++
-    str     w5, [x0, #28]       // store updated pos
-    
-    // Loop increment
-    add     x4, x4, #1
-    cmp     x4, x3
-    blt     .Lloop
+    b .fm_loop
 
-.Lloop_end:
-    
-    // Store updated phases back to voice
-    str     s15, [x0, #32]     // v->carrier_phase (from running accumulator)
-    str     s14, [x0, #36]     // v->mod_phase (from running accumulator)
-    
-.Lreturn:
-    // Epilogue - restore SIMD registers and return
-    // Restore callee-saved SIMD registers 
-    ldp     q14, q15, [sp, #96]       // restore v14, v15
-    ldp     q12, q13, [sp, #64]       // restore v12, v13
-    ldp     q10, q11, [sp, #32]       // restore v10, v11
-    ldp     q8,  q9,  [sp, #0]        // restore v8, v9  
-    add     sp, sp, #128              // restore stack pointer
-    
-    ldp     x29, x30, [sp], #16       // restore frame and return address
+.fm_loop_end:
+    // Store updated phases
+    str s22, [x0, #32]     // v->carrier_phase
+    str s23, [x0, #36]     // v->mod_phase
+
+.fm_exit:
     ret
-
-// .size fm_voice_process, .-fm_voice_process  // Skip for macOS

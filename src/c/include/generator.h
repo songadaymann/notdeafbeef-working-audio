@@ -1,6 +1,9 @@
 #ifndef GENERATOR_H
 #define GENERATOR_H
 
+/* Nuclear refactor flag - when enabled, removes all C voice fallbacks */
+#define NO_C_VOICES 1
+
 #include <stdint.h>
 #include <stdbool.h>
 #include "music_time.h"

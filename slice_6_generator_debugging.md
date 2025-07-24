@@ -23,12 +23,8 @@
 5. Link layer now stable – duplicates fixed, C init runs with valid timing fields.
 6. Stall occurs inside the ASM frame loop; most probable cause is `frames_to_process` occasionally evaluating to 0, so the outer `while(frames_rem)` never progresses.
 
-## Next actions (rev 2)
-1. Temporarily **restore the small debug printf** block in `generator.s` (lines around Slice-4) to print `frames_rem`, `frames_to_process`, and `pos_in_step` each iteration.
-2. Re-run with a small buffer (e.g. `tests/minimal_kick_test`) to capture the first ~20 iterations; confirm whether `proc=0` appears repeatedly.
-3. If `proc=0` repeats, inspect the values of `step_samples` (w9) and `pos_in_step` (w8) in LLDB to see which operand is wrong.
-4. Fix the arithmetic so `frames_to_process` is **always ≥1** when `frames_rem>0`.
-5. Once the loop completes correctly, remove the debug prints again and proceed to enable `LIMITER_ASM` (Slice-6 target).
+---
+
 
 ## Round 3 – Pointer-clobber Bus-Error (Jul 2025)
 
@@ -520,3 +516,123 @@ Immediate focus: trap that first write to `g.delay.buf`, fix its offset or move 
 **Key Lesson**: Git merges can introduce integration regressions even when both branches compile successfully. Always verify runtime functionality after merges, especially for complex assembly code.
 
 **Next Phase**: Visual development using hard isolation strategy - audio and visuals synchronized via timecode only, zero shared code, separate build targets. The 54-round debugging investment is now bulletproof protected! 🎵✨ 
+
+Round 34 ## Critical Discovery (2025-07-21)
+
+**The Great C Fallback Deception**
+
+| Step | Discovery | Impact |
+|----|----|----| 
+| 10.1 | Systematic testing revealed FM_VOICE_ASM worked when built incrementally but crashed when built from clean | Suspected build order dependency |
+| 10.2 | Found **duplicate symbol linking**: Makefile always included `src/fm_voice.o` (C version) AND conditionally added `../asm/active/fm_voice.o` (ASM version) | Both implementations were being linked simultaneously |
+| 10.3 | Symbol resolution analysis: `nm bin/segment` showed `_fm_voice_process.first_call` - a **C-only static variable** | Proof that C version's `_fm_voice_process` was being used, ASM version ignored |
+| 10.4 | **Fixed Makefile**: Changed FM voice linking from "always C + conditional ASM" to "ASM OR C, never both" | Eliminated C fallback contamination |
+| 10.5 | **First real ASM test**: Built with pure ASM fm_voice_process → **immediate segfault** | Our register alias "fixes" never actually worked! |
+
+### The Smoking Gun
+```bash
+# What we thought was working ASM:
+GEN_OBJ += src/fm_voice.o              # ← C version (always)
+GEN_OBJ += $(ASM_DIR)/fm_voice.o       # ← ASM version (conditional)
+# Result: C version's _fm_voice_process used, ASM version ignored
+
+# What actually tests ASM:
+GEN_OBJ += $(ASM_DIR)/fm_voice.o src/fm_voice.o  # ← ASM process + C helpers
+# Result: Real ASM _fm_voice_process used, immediate crash
+```
+
+### Implications
+1. **All previous "successful" ASM tests were actually running C fallbacks**
+2. **Our register alias fixes were never actually executed or tested**
+3. **The FM_VOICE_ASM implementation has been broken this entire time**
+4. **We need to restart FM ASM debugging from scratch with the real implementation**
+
+---
+
+## Round 34 – FM Voice Working, Discovery of Hidden C Fallbacks (July 2025)
+
+| Step | Change / Investigation | Result | Insight |
+|------|------------------------|--------|---------|
+| 131 | Implemented working FM_VOICE_ASM with proper FM synthesis and linear amplitude decay | FM synthesis audible (harsh but correct) when tested in isolation | ASM FM core functionality working |
+| 132 | Added FM_VOICE_ASM to full segment build with all other ASM voices | Only FM heard - completely drowns out drums/melody/delay | Level issue, not corruption |
+| 133 | Oracle analysis identified root cause: linear envelope vs exponential envelope | Linear envelope 20-30dB hotter than exponential; limiter clamps entire mix | Gain structure problem, not mixing bug |
+| 134 | Attempted Oracle's exponential envelope fix | Complete silence (envelope too aggressive) | Over-correction |
+| 135 | Applied simple -20dB scaling fix to FM output | Still only FM heard, just quieter | Not actually a level issue |
+| 136 | Stubbed FM voice to do nothing (`ret` only) | All trigger events fire correctly, but only drums audible | **Hidden fallback discovery** |
+
+### Critical Discovery: The Great C Fallback Deception
+
+**Root Cause Found**: When `FM_VOICE_ASM` and `MELODY_ASM` are enabled, the conditional compilation removes the C versions from `generator_step.c`, but our ASM implementations have bugs that prevent other voices from working.
+
+**Testing Matrix Revealed**:
+- ✅ **ASM infrastructure + C voices**: `GENERATOR_ASM KICK_ASM SNARE_ASM HAT_ASM LIMITER_ASM DELAY_ASM` → Perfect balanced mix
+- ❌ **ASM everything**: Add `MELODY_ASM` → Only drums heard  
+- ❌ **ASM everything**: Add `FM_VOICE_ASM` → Only FM heard (before) / Only drums (after stub)
+
+**Implications**:
+1. **ASM drums/effects work perfectly** when C voices handle melody/FM
+2. **ASM melody implementation is broken** - triggers fire but no audio output
+3. **ASM FM implementation is broken** - either dominates mix or corrupts other voices
+4. **Multiple ASM voice bugs** were masked by partial C fallbacks
+
+### FORCE_ALL_ASM System Implementation
+
+Added `FORCE_ALL_ASM` flag to permanently disable all C voice fallbacks:
+
+```c
+#ifdef FORCE_ALL_ASM
+    // No C fallbacks allowed - all voices must be ASM
+#else
+    #ifndef MELODY_ASM
+        melody_process(&g->mel, Ls, Rs, n);  // C fallback
+    #endif
+    #ifndef FM_VOICE_ASM
+        fm_voice_process(&g->mid_fm, Ls, Rs, n);  // C fallback
+    #endif
+#endif
+```
+
+**Result**: Build fails with duplicate symbols, exposing that Makefile links both ASM and C versions simultaneously. System now **forces true ASM-only builds** with no silent fallbacks.
+
+## Round 35 – Nuclear Option Planning (July 2025)
+
+### Current Situation Assessment
+
+**Working Hybrid Configuration**:
+- ✅ **ASM**: Generator loop, drums (kick/snare/hat), delay, limiter  
+- ✅ **C**: Melody (saw wave), FM voices (mid-FM pad, bass-FM)
+- ✅ **Sound**: Perfect balanced mix, all voices audible
+
+**Broken Pure ASM**:
+- ❌ **ASM melody**: Triggers fire but produces no audio
+- ❌ **ASM FM**: Either isolates other voices or crashes
+- ❌ **Build system**: Duplicate symbols when forcing ASM-only
+
+### Nuclear Refactor Option
+
+**Concept**: Permanently remove all C voice implementations and conditional compilation to create a **pure ASM audio engine** with minimal C scaffolding.
+
+**Plan**:
+1. **Delete C voice files**: `kick.c`, `snare.c`, `hat.c`, `melody.c`, `fm_voice.c`, `generator.c`
+2. **Remove conditional compilation**: Eliminate all `#ifndef *_ASM` blocks
+3. **Simplify Makefile**: Always link ASM versions, remove conditional logic
+4. **Keep essential C infrastructure**: Entry points, I/O, data structures, orchestration
+5. **Force ASM voices to work**: No fallback option means bugs must be fixed
+
+**Benefits**:
+- Clean architecture with no hidden fallbacks
+- Forces completion of ASM voice implementations  
+- Eliminates build system complexity
+- Pure ASM audio engine with minimal C overhead
+
+**Risks**:
+- Irreversible without git (current ASM voices are broken)
+- Must debug and fix multiple ASM implementations simultaneously
+- May require significant rework of broken voice code
+
+### Next Actions (rev 4)
+1. **Document nuclear refactor plan** in detail for Oracle consultation
+2. **Create git checkpoint** before irreversible changes
+3. **Oracle guidance** on systematic approach to ASM voice debugging
+4. **Execute nuclear refactor** if Oracle approves approach
+5. **Debug ASM voices** in isolated, no-fallback environment

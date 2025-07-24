@@ -189,6 +189,7 @@ HAT_BIN := bin/gen_hat
 MELODY_BIN := bin/gen_melody
 FM_BIN := bin/gen_fm
 SEG_BIN := bin/segment
+SEG_TEST_BIN := bin/segment_test
 DRUMS_BIN := bin/segment_drums
 DRUMS_MEL_BIN := bin/segment_drums_mel
 DRUMS_BASS_BIN := bin/segment_drums_bass
@@ -199,12 +200,16 @@ PLUCK_BIN := bin/gen_pluck
 BASS_BIN := bin/gen_bass
 BASSQ_BIN := bin/gen_bass_quantum
 BASSP_BIN := bin/gen_bass_plucky
+MELODY_DEBUG_BIN := bin/melody_debug_test
+FM_DEBUG_BIN := bin/fm_debug_test
 
 SEG_OBJ := src/segment.o src/wav_writer.o
+SEG_TEST_OBJ := src/segment_test.o src/wav_writer.o
 
 # Include C euclid.o only when not using assembly (to avoid duplicate symbols)
 ifneq ($(USE_ASM),1)
 SEG_OBJ += src/euclid.o
+SEG_TEST_OBJ += src/euclid.o
 endif
 
 # -----------------------------------------------------------------
@@ -218,19 +223,40 @@ HAT_ASM_PRESENT    := $(filter $(ASM_DIR)/hat.s,$(ASM_SRC))
 MELODY_ASM_PRESENT := $(filter $(ASM_DIR)/melody.s,$(ASM_SRC))
 
 # Rebuild GEN_OBJ list: start with ASM objects and common C helpers
+# Exclude src/osc.o when ASM oscillators are present to avoid duplicate symbols
+ifeq ($(USE_ASM),1)
+GEN_OBJ := $(ASM_OBJ) $(NEON_OBJ) src/fm_presets.o \
+          src/event_queue.o src/simple_voice.o
+else
 GEN_OBJ := $(ASM_OBJ) src/osc.o $(NEON_OBJ) src/fm_presets.o \
           src/event_queue.o src/simple_voice.o
+endif
 
-# Add FM voice object (ASM process + C helpers, or pure C)
-GEN_OBJ += src/fm_voice.o
+# Add FM voice object (hybrid ASM+C for helpers, or pure C fallback)
 ifeq ($(findstring -DFM_VOICE_ASM,$(CFLAGS)),-DFM_VOICE_ASM)
-GEN_OBJ += $(ASM_DIR)/fm_voice.o
+GEN_OBJ += $(ASM_DIR)/fm_voice.o src/fm_voice.o
+else
+GEN_OBJ += src/fm_voice.o
+endif
+
+# Nuclear refactor flag - set to 1 to remove all C voice fallbacks  
+NO_C_VOICES := 0
+ifeq ($(NO_C_VOICES),1)
+CFLAGS += -DNO_C_VOICES=1
 endif
 
 # Always include per-voice C modules for init/trigger helpers.
-# Their heavy process() functions are wrapped in #ifndef <VOICE>_ASM so they
-# vanish when the corresponding -D<VOICE>_ASM flag is set, avoiding duplicate
-# symbols while still providing the lightweight helpers the generator relies on.
+# When NO_C_VOICES=0: Their process() functions work as fallbacks via #ifndef guards
+# When NO_C_VOICES=1: Only init/trigger helpers are used, process() functions disabled
+ifeq ($(NO_C_VOICES),1)
+  # With NO_C_VOICES=1, all voices must have ASM implementations
+  VOICE_LIST := kick snare hat melody
+  $(foreach voice,$(VOICE_LIST),\
+    $(if $(findstring $(shell echo $(voice) | tr '[:lower:]' '[:upper:]')_ASM,$(VOICE_ASM)),,\
+      $(error NO_C_VOICES=1 but $(voice) ASM implementation missing)\
+    )\
+  )
+endif
 GEN_OBJ += src/kick.o src/snare.o src/hat.o src/melody.o
 
 # Delay C fallback only when ASM version *not* present (it contains only the
@@ -258,6 +284,9 @@ REALTIME_BIN := bin/realtime
 all: $(SEG_BIN) $(REALTIME_BIN)
 
 $(SEG_BIN): $(SEG_OBJ) $(GEN_OBJ) | bin
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(SEG_TEST_BIN): $(SEG_TEST_OBJ) $(GEN_OBJ) | bin
 	$(CC) $(CFLAGS) -o $@ $^
 
 $(REALTIME_BIN): $(REALTIME_OBJ) $(GEN_OBJ) | bin
@@ -345,6 +374,12 @@ $(BASSQ_BIN): src/gen_bass_quantum.c src/fm_voice.o $(NEON_OBJ) src/fm_presets.o
 
 $(BASSP_BIN): src/gen_bass_plucky.c src/fm_voice.o $(NEON_OBJ) src/fm_presets.o src/wav_writer.o $(ASM_OBJ) | bin
 	$(CC) $(CFLAGS) -o $@ $^
+
+$(MELODY_DEBUG_BIN): src/melody_debug_test.c src/wav_writer.o $(GEN_OBJ) | bin
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(FM_DEBUG_BIN): src/fm_debug_test.c src/wav_writer.o $(GEN_OBJ) | bin
+	$(CC) $(CFLAGS) -o $@ $^
 else
 $(BELLS_BIN): src/gen_bells.c src/fm_voice.o $(NEON_OBJ) src/fm_presets.o src/wav_writer.o | bin
 	$(CC) $(CFLAGS) -o $@ $^
@@ -386,7 +421,7 @@ $(ASM_DIR):
 
 .PHONY: clean
 clean:
-	rm -rf src/*.o bin src/euclid.o ../asm/active/*.o 2>/dev/null || true
+	rm -rf src/*.o bin src/euclid.o 2>/dev/null || true
 
 .PHONY: sine
 sine: $(TEST_BIN)
@@ -428,12 +463,38 @@ fm: clean $(FM_BIN)
 	$(FM_BIN)
 	@echo "Generated fm.wav"
 
+.PHONY: fm_c
+fm_c: clean
+	$(MAKE) $(FM_BIN)
+	$(FM_BIN)
+	mv fm.wav fm_c.wav
+	@echo "Generated fm_c.wav (C version)"
+
+.PHONY: fm_asm
+fm_asm: clean
+	$(MAKE) $(FM_BIN) USE_ASM=1 VOICE_ASM="FM_VOICE_ASM"
+	$(FM_BIN)
+	mv fm.wav fm_asm.wav
+	@echo "Generated fm_asm.wav (Assembly version)"
+
 .PHONY: segment
 segment: $(SEG_BIN)
 ifndef NO_RUN
 	$(SEG_BIN)
 	@echo "Generated segment.wav"
 endif
+
+.PHONY: segment_test
+segment_test: $(SEG_TEST_BIN)
+	@echo "Built segment_test. Usage: $(SEG_TEST_BIN) <category1> [category2] ..."
+
+.PHONY: melody_debug  
+melody_debug: $(MELODY_DEBUG_BIN)
+	$(MELODY_DEBUG_BIN)
+
+.PHONY: fm_debug  
+fm_debug: $(FM_DEBUG_BIN)
+	$(FM_DEBUG_BIN)
 
 .PHONY: drums
 drums: $(DRUMS_BIN)

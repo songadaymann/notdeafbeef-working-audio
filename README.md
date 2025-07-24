@@ -44,6 +44,30 @@ make segment USE_ASM=1 VOICE_ASM="GENERATOR_ASM KICK_ASM SNARE_ASM HAT_ASM MELOD
 
 This generates `seed_0xcafebabe.wav` - a complete musical composition synthesized entirely in assembly.
 
+### 🧪 Voice Testing & Debugging Tools
+
+**Individual Voice Testing:**
+```bash
+# Test individual voices in isolation
+make gen_kick_single && ./bin/gen_kick_single      # → kick_single.wav
+make gen_hat_single && ./bin/gen_hat_single        # → hat_single.wav  
+make gen_snare_single && ./bin/gen_snare_single    # → snare_single.wav
+
+# Flexible voice combinations
+make gen_custom && ./bin/gen_custom melody         # → custom_test.wav (melody only)
+./bin/gen_custom drums                             # → custom_test.wav (kick+snare+hat)
+./bin/gen_custom kick snare                        # → custom_test.wav (kick+snare)
+```
+
+**Full Arrangement Testing:**
+```bash
+# Test complete musical arrangement with selective voice categories
+make segment_test && ./bin/segment_test drums                    # Real song, drums only
+./bin/segment_test drums delay                                  # Real song, drums + delay
+./bin/segment_test drums melody delay                           # Real song, drums + melody + delay
+./bin/segment_test drums melody delay fm limiter                # Full arrangement
+```
+
 ### Alternative: C Reference Version
 
 ```bash
@@ -103,9 +127,70 @@ make segment USE_ASM=1 VOICE_ASM="GENERATOR_ASM KICK_ASM SNARE_ASM HAT_ASM"
 make segment USE_ASM=0
 ```
 
+## 🧪 Debugging Individual Voice Issues
+
+### Component-by-Component Testing Strategy
+
+**Step 1: Test Drums Individually**
+```bash
+./bin/gen_custom kick     # Should produce single kick hit
+./bin/gen_custom snare    # Should produce single snare hit  
+./bin/gen_custom hat      # Should produce single hi-hat hit
+```
+
+**Step 2: Test Voice Combinations**
+```bash
+./bin/gen_custom drums           # All drums together
+./bin/gen_custom drums melody    # Drums + melodic content
+./bin/gen_custom fm              # Just FM synthesis voices
+```
+
+**Step 3: Test Full Arrangement Subsets**
+```bash
+./bin/segment_test drums                    # Real song timing, drums only
+./bin/segment_test drums melody             # Add melody to drums
+./bin/segment_test drums melody delay       # Add delay effects
+./bin/segment_test drums melody delay fm    # Add FM synthesis
+```
+
+### Current Voice Status (as of debugging session)
+- ✅ **Kick ASM**: Working (fixed amplitude issue)
+- ✅ **Snare ASM**: Working  
+- ✅ **Hat ASM**: Working
+- ❌ **Melody ASM**: Silent (needs debugging)
+- ❓ **FM Voice ASM**: Unknown (suspected level/timing issues)
+
 ## 🐛 Troubleshooting
 
-### Common Issues:
+### Voice-Specific Issues:
+
+**1. Silent voice output**
+```bash
+# Test individual voice in isolation first
+./bin/gen_custom <voice_name>
+# If silent, check ASM implementation for:
+# - Register preservation (x19-x28 callee-saved)
+# - Struct offset correctness
+# - Amplitude levels
+```
+
+**2. Voice too quiet in mix**
+```bash
+# Test voice alone vs. in combination
+./bin/gen_custom kick              # Individual test
+./bin/gen_custom drums             # In combination
+# Adjust amplitude constants in ASM files if needed
+```
+
+**3. FM Voice issues**
+```bash
+# Test FM voices separately from drums
+./bin/gen_custom fm                # FM only
+./bin/segment_test fm              # FM with real timing
+# Check for level issues or timing conflicts
+```
+
+### Build Issues:
 
 **1. Undefined symbol `_euclid_pattern`**
 ```bash
@@ -181,9 +266,17 @@ Assembly implementation provides:
 This represents the culmination of extensive assembly optimization work:
 - Complete C reference implementation
 - Incremental assembly conversion
-- Extensive debugging and register management  
+- **Nuclear refactor** to eliminate C voice fallbacks (July 2025)
+- **54+ rounds of debugging** to achieve stable FM voice assembly
+- **Component-by-component testing system** for voice isolation
+- Register aliasing fixes and voice-level debugging
 - Integration testing across all components
 - Clean repository migration preserving all functionality
+
+### Key Debugging Milestones:
+- **Round 33**: All-ASM audio engine achieved 
+- **Round 34**: Discovery of "Great C Fallback Deception"
+- **July 2025**: Nuclear refactor implementation & individual voice testing system
 
 ## 📝 License
 

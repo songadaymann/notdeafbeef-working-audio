@@ -4,7 +4,7 @@
 
 // --- Constants ---
 AMP_const:
-    .float 0.8            // overall amplitude
+    .float 1.2            // overall amplitude (increased from 0.8 for better balance)
 
 // Offsets inside kick_t struct (see kick.h)
 .equ K_SR,         0     // float sr
