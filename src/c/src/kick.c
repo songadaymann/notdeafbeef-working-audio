@@ -3,7 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 
-#define KICK_BASE_FREQ 100.0f
+#define KICK_BASE_FREQ 70.0f
 #define TAU (2.0f * M_PI)
 
 void kick_init(kick_t *k, float32_t sr)
